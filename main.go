@@ -170,12 +170,15 @@ func localWriter(writeChan chan writeme) {
 		//check if we need to make dirs or whatever
 		//last object after exploding on file sep is the file, so everything before that I guess
 		exploded := strings.Split(d.localFilePath, "/")
-		if len(exploded) > 1 {
-			dirpath := filepath.Join(exploded[:len(exploded)-1]...)
+
+		if len(exploded) > 2 {
+			dirpath := filepath.Join(exploded[:len(exploded)-2]...)
 			if _, err := os.Stat(dirpath); os.IsNotExist(err) {
 				os.MkdirAll(dirpath, os.ModePerm)
 			}
+			fmt.Println(exploded, exploded[len(exploded)-1], exploded[len(exploded)-2])
 		}
+
 		ioutil.WriteFile(d.localFilePath, d.filecontents, 0644)
 	}
 }
