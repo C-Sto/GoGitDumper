@@ -176,7 +176,6 @@ func localWriter(writeChan chan writeme) {
 			if _, err := os.Stat(dirpath); os.IsNotExist(err) {
 				os.MkdirAll(dirpath, os.ModePerm)
 			}
-			fmt.Println(exploded, exploded[len(exploded)-1], exploded[len(exploded)-2])
 		}
 
 		ioutil.WriteFile(d.localFilePath, d.filecontents, 0644)
