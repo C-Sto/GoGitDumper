@@ -12,9 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/c-sto/GitGobuster/ThreadSafeSet"
 )
 
 var commonrefs = []string{
@@ -34,7 +33,7 @@ var commonfiles = []string{
 	"index", "info/exclude", "objects/info/packs",
 }
 
-var tested ThreadSafeSet.ThreadSafeSet
+var tested ThreadSafeSet
 var url string
 var localpath string
 
@@ -63,7 +62,7 @@ func main() {
 		panic("Url required")
 	}
 	workers := cfg.Threads
-	tested = ThreadSafeSet.ThreadSafeSet{}.Init()
+	tested = ThreadSafeSet{}.Init()
 
 	url = cfg.Url
 	localpath = cfg.Localpath
@@ -180,4 +179,32 @@ func localWriter(writeChan chan writeme) {
 
 		ioutil.WriteFile(d.localFilePath, d.filecontents, 0644)
 	}
+}
+
+type ThreadSafeSet struct {
+	mutex *sync.RWMutex
+	vals  map[string]bool
+}
+
+func (t ThreadSafeSet) Init() ThreadSafeSet {
+	t = ThreadSafeSet{}
+	t.mutex = &sync.RWMutex{}
+	t.vals = make(map[string]bool)
+	return t
+}
+
+func (t ThreadSafeSet) HasValue(s string) bool {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	if _, ok := t.vals[s]; ok {
+		return true
+	}
+	return false
+}
+
+func (t *ThreadSafeSet) Add(s string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.vals[s] = true
+
 }
