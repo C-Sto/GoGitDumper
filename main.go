@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"./ThreadSafeSet"
+	"github.com/c-sto/GitGobuster/ThreadSafeSet"
 )
 
 var commonrefs = []string{
@@ -173,7 +173,7 @@ func localWriter(writeChan chan writeme) {
 
 		if len(exploded) > 2 {
 			dirpath := filepath.Join(exploded[:len(exploded)-2]...)
-			if _, err := os.Stat(dirpath); os.IsNotExist(err) {
+			if _, err := os.Stat(dirpath); !os.IsNotExist(err) {
 				os.MkdirAll(dirpath, os.ModePerm)
 			}
 		}
