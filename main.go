@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 )
@@ -168,13 +167,11 @@ func localWriter(writeChan chan writeme) {
 		d := <-writeChan
 		//check if we need to make dirs or whatever
 		//last object after exploding on file sep is the file, so everything before that I guess
-		exploded := strings.Split(d.localFilePath, "/")
+		dirpath := filepath.Dir(d.localFilePath)
 
-		if len(exploded) > 2 {
-			dirpath := filepath.Join(exploded[:len(exploded)-2]...)
-			if _, err := os.Stat(dirpath); !os.IsNotExist(err) {
-				os.MkdirAll(dirpath, os.ModePerm)
-			}
+		if _, err := os.Stat(dirpath); os.IsNotExist(err) {
+			fmt.Println("WRITING", dirpath)
+			os.MkdirAll(dirpath, os.ModePerm)
 		}
 
 		ioutil.WriteFile(d.localFilePath, d.filecontents, 0644)
