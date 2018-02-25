@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,6 +71,8 @@ func main() {
 	newfilequeue := make(chan string, 100)
 	writefileChan := make(chan writeme, 100)
 
+	//get HEAD. If this fails, we are probably going to have a bad time
+
 	go localWriter(writefileChan)
 	go adderWorker(getqueue, newfilequeue)
 
@@ -77,7 +80,25 @@ func main() {
 		go GetWorker(getqueue, newfilequeue, writefileChan)
 	}
 
-	//get HEAD. If this fails, we are probably going to have a bad time
+	infofile, err := getThing(url + "info")
+	if err != nil {
+		//handle error?
+	}
+	fmt.Println(string(infofile))
+
+	//get packfiles from objects/info/packs
+	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
+	packfile, err := getThing(url + "objects/info/packs")
+	if err != nil {
+		//handle error?
+	}
+	if len(packfile) > 0 {
+		match := sha1re.FindAll(packfile, -1)
+		for _, x := range match {
+			newfilequeue <- url + "/objects/pack/pack-" + string(x) + ".idx"
+			newfilequeue <- url + "/objects/pack/pack-" + string(x) + ".pack"
+		}
+	}
 
 	for _, x := range commonrefs {
 		newfilequeue <- url + x
@@ -96,7 +117,8 @@ func main() {
 }
 
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
-	re := regexp.MustCompile("[0-9a-fA-F]{40}")
+	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
+	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
 	for {
 
 		path := <-c
@@ -122,13 +144,23 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 			r.Close()
 		}
 
-		//check for any sha1 objects in the ref
-		match := re.FindAll(resp, -1)
+		//check for any sha1 objects in the thing
+		match := sha1re.FindAll(resp, -1)
 		for _, x := range match {
 			//add sha1's to line
 			c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:])
 		}
-		//check for any refs in object (by grepping it I guess?)
+
+		//check for ref paths in the thing
+		match = refre.FindAll(resp, -1)
+		for _, x := range match {
+			if string(x[len(x)-1]) == "*" {
+				continue
+			}
+			c2 <- url + string(x)
+			c2 <- url + "logs/" + string(x)
+			fmt.Println(string(x))
+		}
 
 	}
 }
@@ -140,9 +172,14 @@ func getThing(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		return nil, errors.New("File not found")
+		return nil, errors.New("404 File not found")
+	} else if resp.StatusCode != 200 {
+		return nil, errors.New("Error code: " + string(resp.StatusCode))
 	}
 	body, err := ioutil.ReadAll(resp.Body)
+	if strings.Contains(string(body), "<title>Directory listing for ") {
+		return nil, errors.New("Found directory indexing, consider using recursive grep to mirror")
+	}
 	return body, err
 }
 
@@ -168,12 +205,9 @@ func localWriter(writeChan chan writeme) {
 		//check if we need to make dirs or whatever
 		//last object after exploding on file sep is the file, so everything before that I guess
 		dirpath := filepath.Dir(d.localFilePath)
-
 		if _, err := os.Stat(dirpath); os.IsNotExist(err) {
-			fmt.Println("WRITING", dirpath)
 			os.MkdirAll(dirpath, os.ModePerm)
 		}
-
 		ioutil.WriteFile(d.localFilePath, d.filecontents, 0644)
 	}
 }
