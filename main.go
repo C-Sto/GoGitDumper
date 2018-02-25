@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+var version = "0.1"
+
 var commonrefs = []string{
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
 	"config", "info/refs", "logs/HEAD", "logs/refs/heads/master",
@@ -49,6 +51,8 @@ type config struct {
 }
 
 func main() {
+	fmt.Println("GoGitBuster V" + version)
+	fmt.Println("Poorl hacked together by C_Sto")
 
 	//setup
 	cfg := config{}

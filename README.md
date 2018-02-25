@@ -1,4 +1,18 @@
-# GoGitDumper
+# GoGitDumper V0.1
+
+### Usage
+
+```
+gogitbuster -u http://urlhere.com/.git/ -o yourdecideddir/.git/
+..(wait for dumping)..
+cd yourdecdieddir
+git checkout *
+```
+
+It may not collect every single bit of the source repo - but it should get a substantial amount of it fairly quickly.
+
+
+### Description
 
 More than once during an engagement I've needed to dump a public git repo that is available over http, without directory indexing enabled. With driectory indexing enabled, it's significantly easier - probably just recursive wget in those instances (or maybe I'll get indexing logic in this eventually idk).
 
