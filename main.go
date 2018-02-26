@@ -32,7 +32,8 @@ var commonfiles = []string{
 	"hooks/post-receive.sample", "hooks/post-update.sample", "hooks/pre-applypatch.sample",
 	"hooks/pre-commit.sample", "hooks/pre-push.sample", "hooks/pre-rebase.sample",
 	"hooks/pre-receive.sample", "hooks/prepare-commit-msg.sample", "hooks/update.sample",
-	"index", "info/exclude", "objects/info/packs",
+	"info/exclude", "objects/info/packs",
+	"index", //this should be obtained manually and parsed out for goodies.
 }
 
 var tested ThreadSafeSet
@@ -50,9 +51,14 @@ type config struct {
 	Localpath string
 }
 
+func printBanner() {
+	fmt.Println(strings.Repeat("=", 20))
+	fmt.Println("GoGitDumper V" + version)
+	fmt.Println("Poorly hacked together by C_Sto")
+	fmt.Println(strings.Repeat("=", 20))
+}
+
 func main() {
-	fmt.Println("GoGitBuster V" + version)
-	fmt.Println("Poorl hacked together by C_Sto")
 
 	//setup
 	cfg := config{}
@@ -65,31 +71,59 @@ func main() {
 	if cfg.Url == "" { //todo: check for correct .git thing
 		panic("Url required")
 	}
+
 	workers := cfg.Threads
 	tested = ThreadSafeSet{}.Init()
 
 	url = cfg.Url
 	localpath = cfg.Localpath
 
-	getqueue := make(chan string, 100)
-	newfilequeue := make(chan string, 100)
-	writefileChan := make(chan writeme, 100)
+	//setting the chan size to slightly bigger than the number of workers to avoid deadlocks on high worker counts
+	getqueue := make(chan string, workers+5)
+	newfilequeue := make(chan string, workers+5)
+	writefileChan := make(chan writeme, workers+5)
 
-	//get HEAD. If this fails, we are probably going to have a bad time
+	//todo: check url is good
+	//get HEAD or index. If this fails, we are probably going to have a bad time
 
-	go localWriter(writefileChan)
+	go localWriter(writefileChan) //writes out the downloaded files
+
+	//takes any new objects identified, and checks to see if already downloaded. will add new files to the queue if unique.
 	go adderWorker(getqueue, newfilequeue)
 
+	//downloader bois
 	for x := 0; x < workers; x++ {
 		go GetWorker(getqueue, newfilequeue, writefileChan)
 	}
 
-	infofile, err := getThing(url + "info")
-	if err != nil {
-		//handle error?
-	}
-	fmt.Println(string(infofile))
+	//get the index file, parse it for files and whatnot
+	go getIndex(newfilequeue, writefileChan)
 
+	//get the packs (if any exist) and parse them out too
+	go getPacks(newfilequeue, writefileChan)
+
+	//get all the common things that contain refs
+	for _, x := range commonrefs {
+		newfilequeue <- url + x
+	}
+
+	//get all the common files that may be important I guess?
+	for _, x := range commonfiles {
+		newfilequeue <- url + x
+	}
+
+	//todo: make this wait for closed channels and such
+	for {
+		if len(getqueue) == 0 && len(newfilequeue) == 0 {
+			break
+		}
+		time.Sleep(time.Second * 2)
+	}
+
+}
+
+func getPacks(newfilequeue chan string, writefileChan chan writeme) {
+	//todo: parse packfiles for new objects and whatnot
 	//get packfiles from objects/info/packs
 	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
 	packfile, err := getThing(url + "objects/info/packs")
@@ -103,21 +137,17 @@ func main() {
 			newfilequeue <- url + "/objects/pack/pack-" + string(x) + ".pack"
 		}
 	}
+}
 
-	for _, x := range commonrefs {
-		newfilequeue <- url + x
-	}
-	for _, x := range commonfiles {
-		newfilequeue <- url + x
-	}
+func getIndex(newfileChan chan string, localfileChan chan writeme) {
 
-	for {
-		if len(getqueue) == 0 && len(newfilequeue) == 0 {
-			break
+	/*
+		indexfile, err := getThing(url + "index")
+		if err != nil {
+			//handle error?
 		}
-		time.Sleep(time.Second * 2)
-	}
-
+		//todo: parse info file
+	*/
 }
 
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
