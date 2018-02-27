@@ -89,10 +89,10 @@ func main() {
 	url = cfg.Url
 	localpath = cfg.Localpath
 
-	//setting the chan size to slightly bigger than the number of workers to avoid deadlocks on high worker counts
-	getqueue := make(chan string, workers+5)
-	newfilequeue := make(chan string, workers+5)
-	writefileChan := make(chan writeme, workers+5)
+	//setting the chan size to bigger than the number of workers to avoid deadlocks on high worker counts
+	getqueue := make(chan string, workers*2)
+	newfilequeue := make(chan string, workers*2)
+	writefileChan := make(chan writeme, workers*2)
 
 	go localWriter(writefileChan) //writes out the downloaded files
 
@@ -149,15 +149,16 @@ func getPacks(newfilequeue chan string, writefileChan chan writeme) {
 	writefileChan <- d
 
 	if len(packfile) > 0 {
-		/* //this is not how packfiles work
+		//this is not how packfiles work. Worst case is we accidentally download some packfiles,
+		//but as the sha1 is based on the last 20 bytes (or something like that), not sure how to do this blindly
 		sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
 		match := sha1re.FindAll(packfile, -1) //doing dumb regex look for sha1's in packfiles, I don't think this is how it works tbh
 		for _, x := range match {
 
-			//newfilequeue <- url + "objects/pack/pack-" + string(x) + ".idx"
-			//newfilequeue <- url + "objects/pack/pack-" + string(x) + ".pack"
+			newfilequeue <- url + "objects/pack/pack-" + string(x) + ".idx"
+			newfilequeue <- url + "objects/pack/pack-" + string(x) + ".pack"
 		}
-		*/
+
 	}
 }
 
