@@ -51,9 +51,10 @@ type writeme struct {
 }
 
 type config struct {
-	Threads   int
-	Url       string
-	Localpath string
+	Threads     int
+	Url         string
+	Localpath   string
+	IndexBypass bool
 }
 
 func printBanner() {
@@ -77,6 +78,7 @@ func main() {
 	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	flag.StringVar(&cfg.Url, "u", "", "Url to dump (ensure the .git directory has a trailing '/')")
 	flag.StringVar(&cfg.Localpath, "o", "."+string(os.PathSeparator), "Local folder to dump into")
+	flag.BoolVar(&cfg.IndexBypass, "i", false, "Bypass parsing the index file, but still download it")
 
 	flag.Parse()
 
@@ -106,9 +108,13 @@ func main() {
 	}
 
 	//get the index file, parse it for files and whatnot
-	err := getIndex(newfilequeue, writefileChan)
-	if err != nil {
-		panic(err)
+	if cfg.IndexBypass {
+		newfilequeue <- url + "index"
+	} else {
+		err := getIndex(newfilequeue, writefileChan)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	//get the packs (if any exist) and parse them out too
