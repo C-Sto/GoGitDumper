@@ -19,7 +19,7 @@ import (
 	//_ "net/http/pprof"
 )
 
-var version = "0.2.1"
+var version = "0.3"
 
 var commonrefs = []string{
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
@@ -108,7 +108,6 @@ func main() {
 	}
 
 	//get the index file, parse it for files and whatnot
-	fmt.Println(cfg.IndexBypass)
 	if cfg.IndexBypass {
 		newfilequeue <- url + "index"
 	} else {
@@ -284,7 +283,9 @@ func getThing(path string) ([]byte, error) {
 	} else if resp.StatusCode != 200 {
 		return nil, errors.New(fmt.Sprintf("Error code: %d\n", resp.StatusCode))
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	buf := &bytes.Buffer{}
+	buf.ReadFrom(resp.Body)
+	body := buf.Bytes()
 	if strings.Contains(string(body), "<title>Directory listing for ") {
 		return nil, errors.New("Found directory indexing, consider using recursive grep to mirror")
 	}
@@ -376,6 +377,9 @@ func parseIndexFile(b []byte) (indexFile, error) {
 
 	//for each entry
 	for x := uint32(1); x <= indx.EntryCount; x++ {
+		if uint16(64)+readcount > uint16(len(b)) {
+			continue
+		}
 		entryLen := uint16(0)
 		entry := indexEntry{}
 		entry.Number = x
@@ -414,6 +418,7 @@ func parseIndexFile(b []byte) (indexFile, error) {
 		entryLen += 4
 
 		entry.Sha1 = hex.EncodeToString(b[readcount : readcount+20])
+
 		readcount += 20
 		entryLen += 20
 
@@ -436,7 +441,6 @@ func parseIndexFile(b []byte) (indexFile, error) {
 		}
 
 		if entry.Flag_extended && indx.Version == 3 {
-			fmt.Println("hax")
 			entry.ExtraFlags = binary.BigEndian.Uint16(b[readcount : readcount+2])
 			readcount += 2
 			entryLen += 2
@@ -451,7 +455,6 @@ func parseIndexFile(b []byte) (indexFile, error) {
 			entryLen += entry.Flag_nameLen
 
 		}
-
 		//there is probably a better way of doing this
 		padlen := (8 - (entryLen % 8))
 		if padlen == 0 {
