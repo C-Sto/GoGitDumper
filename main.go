@@ -16,8 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	_ "net/http/pprof"
+	//_ "net/http/pprof"
 )
 
 var version = "0.2"
@@ -65,10 +64,12 @@ func printBanner() {
 }
 
 func main() {
-
-	go func() {
-		http.ListenAndServe("localhost:6061", http.DefaultServeMux)
-	}()
+	/*
+		//profiling code - handy when dealing with concurrency and deadlocks ._.
+		go func() {
+			http.ListenAndServe("localhost:6061", http.DefaultServeMux)
+		}()
+	*/
 
 	printBanner()
 	//setup
