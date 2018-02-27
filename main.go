@@ -32,8 +32,10 @@ var commonfiles = []string{
 	"hooks/post-receive.sample", "hooks/post-update.sample", "hooks/pre-applypatch.sample",
 	"hooks/pre-commit.sample", "hooks/pre-push.sample", "hooks/pre-rebase.sample",
 	"hooks/pre-receive.sample", "hooks/prepare-commit-msg.sample", "hooks/update.sample",
-	"info/exclude", "objects/info/packs",
-	"index", //this should be obtained manually and parsed out for goodies.
+	"info/exclude",
+	//these are obtained individually to be parsed for goodies
+	//"objects/info/packs",
+	//"index",
 }
 
 var tested ThreadSafeSet
@@ -59,7 +61,7 @@ func printBanner() {
 }
 
 func main() {
-
+	printBanner()
 	//setup
 	cfg := config{}
 	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
@@ -84,7 +86,7 @@ func main() {
 	writefileChan := make(chan writeme, workers+5)
 
 	//todo: check url is good
-	//get HEAD or index. If this fails, we are probably going to have a bad time
+	//get index. If this fails, we are probably going to have a bad time
 
 	go localWriter(writefileChan) //writes out the downloaded files
 
@@ -97,7 +99,10 @@ func main() {
 	}
 
 	//get the index file, parse it for files and whatnot
-	go getIndex(newfilequeue, writefileChan)
+	err := getIndex(newfilequeue, writefileChan)
+	if err != nil {
+		panic(err)
+	}
 
 	//get the packs (if any exist) and parse them out too
 	go getPacks(newfilequeue, writefileChan)
@@ -139,15 +144,37 @@ func getPacks(newfilequeue chan string, writefileChan chan writeme) {
 	}
 }
 
-func getIndex(newfileChan chan string, localfileChan chan writeme) {
+func getIndex(newfileChan chan string, localfileChan chan writeme) error {
 
-	/*
-		indexfile, err := getThing(url + "index")
-		if err != nil {
-			//handle error?
-		}
-		//todo: parse info file
-	*/
+	indexfile, err := getThing(url + "index")
+	if err != nil {
+		return err
+	}
+
+	//write file, async to avoid dumb blocking
+	go func() {
+		d := writeme{}
+		d.localFilePath = localpath + string(os.PathSeparator) + "index"
+		d.filecontents = indexfile
+		localfileChan <- d
+	}()
+
+	parsed, err := parseIndexFile(indexfile)
+	if err != nil {
+		//deal with parsing error X_X (not blocking for now)
+		return nil
+	}
+
+	for _, x := range parsed.Entries {
+		newfileChan <- url + "objects/" + string(x.Sha1[0:2]) + "/" + string(x.Sha1[2:])
+	}
+
+	return err
+
+}
+
+func parseIndexFile(b []byte) (indexFile, error) {
+	return indexFile{}, nil
 }
 
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
@@ -193,7 +220,6 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 			}
 			c2 <- url + string(x)
 			c2 <- url + "logs/" + string(x)
-			fmt.Println(string(x))
 		}
 
 	}
@@ -271,5 +297,57 @@ func (t *ThreadSafeSet) Add(s string) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 	t.vals[s] = true
+
+}
+
+func readIndex(b []byte) (indexFile, error) {
+	return indexFile{}, nil
+}
+
+type indexFile struct {
+	Signature  [4]byte //should be "DIRC"
+	Version    [4]byte //should be 2 or 3
+	EntryCount [4]byte //32bit number
+	Entries    []indexEntry
+}
+
+type indexEntry struct {
+	Ctime_seconds     [4]byte //32 bit number I guess?
+	Ctime_nanoseconds [4]byte //as above
+	Mtime_seconds     [4]byte //32 bit number I guess?
+	Mtime_nanoseconds [4]byte //as above
+	Dev               [4]byte
+	Ino               [4]byte
+	Mode              [4]byte //4 bit object type, 3 bits unused, 9 bit unix permission
+	Uid               [4]byte
+	Gid               [4]byte
+	Size              [4]byte
+	Sha1              [20]byte
+	Flags             [2]byte // 1 bit assume-valid, 1 bit extended, 2 bit stage, 12 bit name length if length <  0xFF, otherwise 0xFFF
+	ExtraFlags        [2]byte //1bit reserved, 1bit skip-worktree, 1bit intent-to-add, 13 bits unused
+	Name              []byte  //variable length name, because of course
+	Ext_signature     [4]byte
+	Ext_size          [4]byte //32bit int
+
+}
+
+//the actual .pack file
+type packFile struct {
+	//first 12 bytes are meta-info
+	Header      [4]byte //should be 'PACK'
+	Version     [4]byte //version - probably 0,0,0,2 or someth
+	ObjectCount [4]byte //count of all objects in the file
+
+	//last 20 bytes are a checksum
+	checksum [20]byte
+}
+
+type packfileObjects struct {
+}
+
+type packIndex struct {
+	//first 8 bytes is header
+	Header  [4]byte //should be 255,116,79,99
+	Version [4]byte //should be 0,0,0,2
 
 }
