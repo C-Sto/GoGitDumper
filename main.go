@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,9 +16,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	_ "net/http/pprof"
 )
 
-var version = "0.1"
+var version = "0.2"
 
 var commonrefs = []string{
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
@@ -61,6 +65,11 @@ func printBanner() {
 }
 
 func main() {
+
+	go func() {
+		http.ListenAndServe("localhost:6061", http.DefaultServeMux)
+	}()
+
 	printBanner()
 	//setup
 	cfg := config{}
@@ -85,9 +94,6 @@ func main() {
 	newfilequeue := make(chan string, workers+5)
 	writefileChan := make(chan writeme, workers+5)
 
-	//todo: check url is good
-	//get index. If this fails, we are probably going to have a bad time
-
 	go localWriter(writefileChan) //writes out the downloaded files
 
 	//takes any new objects identified, and checks to see if already downloaded. will add new files to the queue if unique.
@@ -105,7 +111,7 @@ func main() {
 	}
 
 	//get the packs (if any exist) and parse them out too
-	go getPacks(newfilequeue, writefileChan)
+	getPacks(newfilequeue, writefileChan)
 
 	//get all the common things that contain refs
 	for _, x := range commonrefs {
@@ -130,17 +136,28 @@ func main() {
 func getPacks(newfilequeue chan string, writefileChan chan writeme) {
 	//todo: parse packfiles for new objects and whatnot
 	//get packfiles from objects/info/packs
-	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
+
 	packfile, err := getThing(url + "objects/info/packs")
 	if err != nil {
 		//handle error?
 	}
+	fmt.Println("Downloaded: ", url+"objects/info/packs")
+
+	d := writeme{}
+	d.localFilePath = localpath + string(os.PathSeparator) + "objects" + string(os.PathSeparator) + "info" + string(os.PathSeparator) + "packs"
+	d.filecontents = packfile
+	writefileChan <- d
+
 	if len(packfile) > 0 {
-		match := sha1re.FindAll(packfile, -1)
+		/* //this is not how packfiles work
+		sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
+		match := sha1re.FindAll(packfile, -1) //doing dumb regex look for sha1's in packfiles, I don't think this is how it works tbh
 		for _, x := range match {
-			newfilequeue <- url + "/objects/pack/pack-" + string(x) + ".idx"
-			newfilequeue <- url + "/objects/pack/pack-" + string(x) + ".pack"
+
+			//newfilequeue <- url + "objects/pack/pack-" + string(x) + ".idx"
+			//newfilequeue <- url + "objects/pack/pack-" + string(x) + ".pack"
 		}
+		*/
 	}
 }
 
@@ -151,13 +168,12 @@ func getIndex(newfileChan chan string, localfileChan chan writeme) error {
 		return err
 	}
 
-	//write file, async to avoid dumb blocking
-	go func() {
-		d := writeme{}
-		d.localFilePath = localpath + string(os.PathSeparator) + "index"
-		d.filecontents = indexfile
-		localfileChan <- d
-	}()
+	fmt.Println("Downloaded: ", url+"index")
+
+	d := writeme{}
+	d.localFilePath = localpath + string(os.PathSeparator) + "index"
+	d.filecontents = indexfile
+	localfileChan <- d
 
 	parsed, err := parseIndexFile(indexfile)
 	if err != nil {
@@ -171,10 +187,6 @@ func getIndex(newfileChan chan string, localfileChan chan writeme) error {
 
 	return err
 
-}
-
-func parseIndexFile(b []byte) (indexFile, error) {
-	return indexFile{}, nil
 }
 
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
@@ -234,7 +246,7 @@ func getThing(path string) ([]byte, error) {
 	if resp.StatusCode == 404 {
 		return nil, errors.New("404 File not found")
 	} else if resp.StatusCode != 200 {
-		return nil, errors.New("Error code: " + string(resp.StatusCode))
+		return nil, errors.New(fmt.Sprintf("Error code: %d\n", resp.StatusCode))
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if strings.Contains(string(body), "<title>Directory listing for ") {
@@ -304,30 +316,161 @@ func readIndex(b []byte) (indexFile, error) {
 	return indexFile{}, nil
 }
 
+func parseIndexFile(b []byte) (indexFile, error) {
+	// thanks to this guy https://github.com/sbp/gin/blob/master/gin
+	indx := indexFile{}
+	readcount := uint16(0) //easier this way
+	//4 byte signature "DIRC"
+	readcount += 4
+	if string(b[:readcount]) != "DIRC" {
+		return indexFile{}, errors.New("Bad index file")
+	}
+	indx.Signature = string(b[:readcount])
+
+	//4 byte version number (32bit int)
+	indx.Version = binary.BigEndian.Uint32(b[readcount : readcount+4])
+	if indx.Version != 2 && indx.Version != 3 {
+		return indexFile{}, errors.New("Bad index file")
+	}
+	readcount += 4
+
+	//4 byte count of index entries
+	indx.EntryCount = binary.BigEndian.Uint32(b[readcount : readcount+4])
+	readcount += 4
+
+	//for each entry
+	for x := uint32(1); x <= indx.EntryCount; x++ {
+		entryLen := uint16(0)
+		entry := indexEntry{}
+		entry.Number = x
+
+		entry.Ctime_seconds = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Ctime_nanoseconds = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Mtime_seconds = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Mtime_nanoseconds = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+
+		entry.Dev = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Ino = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+
+		entry.Mode = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Uid = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Gid = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+		entry.Size = binary.BigEndian.Uint32(b[readcount : readcount+4])
+		readcount += 4
+		entryLen += 4
+
+		entry.Sha1 = hex.EncodeToString(b[readcount : readcount+20])
+		readcount += 20
+		entryLen += 20
+
+		entry.Flags = binary.BigEndian.Uint16(b[readcount : readcount+2])
+		//entry.copy(entry.Flags[:], b[readcount:readcount+2])
+		readcount += 2
+		entryLen += 2
+
+		if entry.Flags&(128<<8) > 0 {
+			entry.Flag_assumevalid = true
+		}
+		if entry.Flags&(64<<8) > 0 {
+			entry.Flag_extended = true
+		}
+		if entry.Flags&(32<<8) > 0 {
+			entry.Flag_stage1 = true
+		}
+		if entry.Flags&(16<<8) > 0 {
+			entry.Flag_stage2 = true
+		}
+
+		if entry.Flag_extended && indx.Version == 3 {
+			fmt.Println("hax")
+			entry.ExtraFlags = binary.BigEndian.Uint16(b[readcount : readcount+2])
+			readcount += 2
+			entryLen += 2
+			//idc about any of this I don't think
+		}
+
+		entry.Flag_nameLen = entry.Flags & 0xfff //this is not what should happen - need to check if it's above fff here?
+
+		if entry.Flag_nameLen < 0xfff { //we literally just made it below 0xfff, so this will always happen... I think
+			entry.Name = string(b[readcount : readcount+entry.Flag_nameLen])
+			readcount += entry.Flag_nameLen
+			entryLen += entry.Flag_nameLen
+
+		}
+
+		//there is probably a better way of doing this
+		padlen := (8 - (entryLen % 8))
+		if padlen == 0 {
+			padlen = 8
+		}
+
+		//ensure all the supposed pad bytes are nulls
+
+		for x := uint16(0); x < padlen; x++ {
+			test := b[readcount : readcount+1]
+			readcount += 1
+			if test[0] != 0x00 {
+				return indexFile{}, errors.New("Index entry padding error")
+			}
+		}
+
+		indx.Entries = append(indx.Entries, entry)
+	}
+
+	return indx, nil
+}
+
 type indexFile struct {
-	Signature  [4]byte //should be "DIRC"
-	Version    [4]byte //should be 2 or 3
-	EntryCount [4]byte //32bit number
+	Signature  string //should be "DIRC"
+	Version    uint32
+	EntryCount uint32
 	Entries    []indexEntry
 }
 
 type indexEntry struct {
-	Ctime_seconds     [4]byte //32 bit number I guess?
-	Ctime_nanoseconds [4]byte //as above
-	Mtime_seconds     [4]byte //32 bit number I guess?
-	Mtime_nanoseconds [4]byte //as above
-	Dev               [4]byte
-	Ino               [4]byte
-	Mode              [4]byte //4 bit object type, 3 bits unused, 9 bit unix permission
-	Uid               [4]byte
-	Gid               [4]byte
-	Size              [4]byte
-	Sha1              [20]byte
-	Flags             [2]byte // 1 bit assume-valid, 1 bit extended, 2 bit stage, 12 bit name length if length <  0xFF, otherwise 0xFFF
-	ExtraFlags        [2]byte //1bit reserved, 1bit skip-worktree, 1bit intent-to-add, 13 bits unused
-	Name              []byte  //variable length name, because of course
-	Ext_signature     [4]byte
-	Ext_size          [4]byte //32bit int
+	Number            uint32
+	Ctime_seconds     uint32 //32 bit number I guess?
+	Ctime_nanoseconds uint32 //as above
+	Mtime_seconds     uint32 //32 bit number I guess?
+	Mtime_nanoseconds uint32 //as above
+	Dev               uint32 //idk lol
+	Ino               uint32 // ^^
+	Mode              uint32 //4 bit object type, 3 bits unused, 9 bit unix permission
+	Uid               uint32
+	Gid               uint32
+	Size              uint32
+	Sha1              string // [20]byte (converted to a string because it's easier that way)
+
+	Flags            uint16 // 1 bit assume-valid, 1 bit extended, 2 bit stage, 12 bit name length if length <  0xFF, otherwise 0xFFF
+	Flag_assumevalid bool
+	Flag_extended    bool
+	Flag_stage1      bool
+	Flag_stage2      bool
+	Flag_nameLen     uint16 //actually 12 bit
+
+	ExtraFlags uint16 //1bit reserved, 1bit skip-worktree, 1bit intent-to-add, 13 bits unused
+	Name       string //variable length name, because of course
+
+	Ext_signature [4]byte
+	Ext_size      [4]byte //32bit int
 
 }
 
