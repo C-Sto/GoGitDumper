@@ -19,7 +19,7 @@ import (
 	//_ "net/http/pprof"
 )
 
-var version = "0.2"
+var version = "0.2.1"
 
 var commonrefs = []string{
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
@@ -108,6 +108,7 @@ func main() {
 	}
 
 	//get the index file, parse it for files and whatnot
+	fmt.Println(cfg.IndexBypass)
 	if cfg.IndexBypass {
 		newfilequeue <- url + "index"
 	} else {
@@ -200,8 +201,8 @@ func getIndex(newfileChan chan string, localfileChan chan writeme) error {
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
 	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
+	localbuffer := []string{}
 	for {
-
 		path := <-c
 		resp, err := getThing(path)
 		if err != nil {
@@ -229,7 +230,14 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 		match := sha1re.FindAll(resp, -1)
 		for _, x := range match {
 			//add sha1's to line
-			c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:])
+
+			select { //this is a gross hack to stop deadlocking on the relatively small channel. Sorry not sorry
+			case c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:]):
+				continue
+			default:
+				localbuffer = append(localbuffer, url+"objects/"+string(x[0:2])+"/"+string(x[2:]))
+			}
+
 		}
 
 		//check for ref paths in the thing
@@ -238,9 +246,31 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 			if string(x[len(x)-1]) == "*" {
 				continue
 			}
-			c2 <- url + string(x)
-			c2 <- url + "logs/" + string(x)
+
+			//very gross hacks not happy
+			select {
+			case c2 <- url + string(x):
+			default:
+				localbuffer = append(localbuffer, url+string(x))
+			}
+
+			select {
+			case c2 <- url + "logs/" + string(x):
+			default:
+				localbuffer = append(localbuffer, url+"logs/"+string(x))
+			}
+
 		}
+
+		//attempt to write the rest of the things, then give up if you can't
+		for _, x := range localbuffer {
+			select {
+			case c2 <- x:
+			default:
+				continue
+			}
+		}
+		fmt.Println(localbuffer)
 
 	}
 }
