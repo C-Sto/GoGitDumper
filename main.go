@@ -262,15 +262,13 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 
 		}
 
-		//attempt to write the rest of the things, then give up if you can't
-		for _, x := range localbuffer {
-			select {
-			case c2 <- x:
-			default:
-				continue
+		//spin off another goroutine to write them all when the channel finally unblocks
+
+		go func() {
+			for _, x := range localbuffer {
+				c2 <- x
 			}
-		}
-		fmt.Println(localbuffer)
+		}()
 
 	}
 }
