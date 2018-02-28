@@ -19,7 +19,7 @@ import (
 	//_ "net/http/pprof"
 )
 
-var version = "0.3"
+var version = "0.3.1"
 
 var commonrefs = []string{
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
