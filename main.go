@@ -202,73 +202,79 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
 	localbuffer := []string{}
 	for {
-		path := <-c
-		resp, err := getThing(path)
-		if err != nil {
-			fmt.Println(err, path)
-			continue //todo: handle err better
-		}
-		fmt.Println("Downloaded: ", path)
-		//write to local path
-		d := writeme{}
-		d.localFilePath = localpath + string(os.PathSeparator) + path[len(url):]
-		d.filecontents = resp
-		localFileWriteChan <- d
+		select {
 
-		//check if we can zlib decompress it
-		zl := bytes.NewReader(resp)
-		r, err := zlib.NewReader(zl)
-		if err == nil {
-			buf := new(bytes.Buffer)
-			buf.ReadFrom(r)
-			resp = buf.Bytes()
-			r.Close()
-		}
+		case path := <-c:
+			resp, err := getThing(path)
+			if err != nil {
+				fmt.Println(err, path)
+				continue //todo: handle err better
+			}
+			fmt.Println("Downloaded: ", path)
+			//write to local path
+			d := writeme{}
+			d.localFilePath = localpath + string(os.PathSeparator) + path[len(url):]
+			d.filecontents = resp
+			localFileWriteChan <- d
 
-		//check for any sha1 objects in the thing
-		match := sha1re.FindAll(resp, -1)
-		for _, x := range match {
-			//add sha1's to line
-
-			select { //this is a gross hack to stop deadlocking on the relatively small channel. Sorry not sorry
-			case c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:]):
-				continue
-			default:
-				localbuffer = append(localbuffer, url+"objects/"+string(x[0:2])+"/"+string(x[2:]))
+			//check if we can zlib decompress it
+			zl := bytes.NewReader(resp)
+			r, err := zlib.NewReader(zl)
+			if err == nil {
+				buf := new(bytes.Buffer)
+				buf.ReadFrom(r)
+				resp = buf.Bytes()
+				r.Close()
 			}
 
-		}
+			//check for any sha1 objects in the thing
+			match := sha1re.FindAll(resp, -1)
+			for _, x := range match {
+				//add sha1's to line
 
-		//check for ref paths in the thing
-		match = refre.FindAll(resp, -1)
-		for _, x := range match {
-			if string(x[len(x)-1]) == "*" {
-				continue
+				select { //this is a gross hack to stop deadlocking on the relatively small channel. Sorry not sorry
+				case c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:]):
+					continue
+				default:
+					localbuffer = append(localbuffer, url+"objects/"+string(x[0:2])+"/"+string(x[2:]))
+				}
+
 			}
 
-			//very gross hacks not happy
-			select {
-			case c2 <- url + string(x):
-			default:
-				localbuffer = append(localbuffer, url+string(x))
+			//check for ref paths in the thing
+			match = refre.FindAll(resp, -1)
+			for _, x := range match {
+				if string(x[len(x)-1]) == "*" {
+					continue
+				}
+
+				//very gross hacks not happy
+				select {
+				case c2 <- url + string(x):
+				default:
+					localbuffer = append(localbuffer, url+string(x))
+				}
+
+				select {
+				case c2 <- url + "logs/" + string(x):
+				default:
+					localbuffer = append(localbuffer, url+"logs/"+string(x))
+				}
+
 			}
 
-			select {
-			case c2 <- url + "logs/" + string(x):
-			default:
-				localbuffer = append(localbuffer, url+"logs/"+string(x))
-			}
+			//spin off another goroutine to write them all when the channel finally unblocks
 
-		}
-
-		//spin off another goroutine to write them all when the channel finally unblocks
-
-		go func() {
+			go func() {
+				for _, x := range localbuffer {
+					c2 <- x
+				}
+			}()
+		default:
 			for _, x := range localbuffer {
 				c2 <- x
 			}
-		}()
-
+		}
 	}
 }
 
