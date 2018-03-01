@@ -19,9 +19,10 @@ import (
 	//_ "net/http/pprof"
 )
 
-var version = "0.4"
+var version = "0.4.1"
 
 var commonrefs = []string{
+	"", //check for indexing
 	"FETCH_HEAD", "HEAD", "ORIG_HEAD",
 	"config", "info/refs", "logs/HEAD", "logs/refs/heads/master",
 	"logs/refs/remotes/origin/HEAD", "logs/refs/remotes/origin/master",
@@ -211,81 +212,55 @@ func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan writ
 func GetWorker(c chan string, c2 chan string, localFileWriteChan chan writeme) {
 	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
 	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
-	localbuffer := []string{}
 	for {
-		select {
 
-		case path := <-c:
-			resp, err := getThing(path)
-			if err != nil {
-				fmt.Println(err, path)
-				continue //todo: handle err better
-			}
-			fmt.Println("Downloaded: ", path)
-			//write to local path
-			d := writeme{}
-			d.localFilePath = localpath + string(os.PathSeparator) + path[len(url):]
-			d.filecontents = resp
-			localFileWriteChan <- d
-
-			//check if we can zlib decompress it
-			zl := bytes.NewReader(resp)
-			r, err := zlib.NewReader(zl)
-			if err == nil {
-				buf := new(bytes.Buffer)
-				buf.ReadFrom(r)
-				resp = buf.Bytes()
-				r.Close()
-			}
-
-			//check for any sha1 objects in the thing
-			match := sha1re.FindAll(resp, -1)
-			for _, x := range match {
-				//add sha1's to line
-
-				select { //this is a gross hack to stop deadlocking on the relatively small channel. Sorry not sorry
-				case c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:]):
-					continue
-				default:
-					localbuffer = append(localbuffer, url+"objects/"+string(x[0:2])+"/"+string(x[2:]))
-				}
-
-			}
-
-			//check for ref paths in the thing
-			match = refre.FindAll(resp, -1)
-			for _, x := range match {
-				if string(x[len(x)-1]) == "*" {
-					continue
-				}
-
-				//very gross hacks not happy
-				select {
-				case c2 <- url + string(x):
-				default:
-					localbuffer = append(localbuffer, url+string(x))
-				}
-
-				select {
-				case c2 <- url + "logs/" + string(x):
-				default:
-					localbuffer = append(localbuffer, url+"logs/"+string(x))
-				}
-
-			}
-
-			//spin off another goroutine to write them all when the channel finally unblocks
-
-			go func() {
-				for _, x := range localbuffer {
-					c2 <- x
-				}
-			}()
-		default:
-			for _, x := range localbuffer {
-				c2 <- x
-			}
+		path := <-c
+		resp, err := getThing(path)
+		if err != nil {
+			fmt.Println(err, path)
+			continue //todo: handle err better
 		}
+		fmt.Println("Downloaded: ", path)
+		//write to local path
+		d := writeme{}
+		d.localFilePath = localpath + string(os.PathSeparator) + path[len(url):]
+		d.filecontents = resp
+		localFileWriteChan <- d
+
+		//check if we can zlib decompress it
+		zl := bytes.NewReader(resp)
+		r, err := zlib.NewReader(zl)
+		if err == nil {
+			buf := new(bytes.Buffer)
+			buf.ReadFrom(r)
+			resp = buf.Bytes()
+			r.Close()
+		}
+
+		//check for any sha1 objects in the thing
+		match := sha1re.FindAll(resp, -1)
+		for _, x := range match {
+			//add sha1's to line
+
+			c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:])
+
+		}
+
+		//check for ref paths in the thing
+		match = refre.FindAll(resp, -1)
+		for _, x := range match {
+			if string(x[len(x)-1]) == "*" {
+				continue
+			}
+
+			//very gross hacks not happy
+
+			c2 <- url + string(x)
+
+			c2 <- url + "logs/" + string(x)
+
+		}
+
 	}
 }
 
@@ -300,9 +275,11 @@ func getThing(path string) ([]byte, error) {
 	} else if resp.StatusCode != 200 {
 		return nil, errors.New(fmt.Sprintf("Error code: %d\n", resp.StatusCode))
 	}
+
 	buf := &bytes.Buffer{}
 	buf.ReadFrom(resp.Body)
 	body := buf.Bytes()
+
 	if strings.Contains(string(body), "<title>Directory listing for ") {
 		return nil, errors.New("Found directory indexing, consider using recursive grep to mirror")
 	}
@@ -314,10 +291,10 @@ func adderWorker(getChan chan string, potentialChan chan string) {
 		x := <-potentialChan
 		if !tested.HasValue(x) {
 			tested.Add(x)
-			getChan <- x
+			go func() { getChan <- x }() //this is way less gross than the other blocking thing
 		}
-
 	}
+
 }
 
 func localWriter(writeChan chan writeme) {
