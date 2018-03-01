@@ -51,10 +51,11 @@ type writeme struct {
 }
 
 type config struct {
-	Threads     int
-	Url         string
-	Localpath   string
-	IndexBypass bool
+	Threads       int
+	Url           string
+	Localpath     string
+	IndexBypass   bool
+	IndexLocation string
 }
 
 func printBanner() {
@@ -79,6 +80,7 @@ func main() {
 	flag.StringVar(&cfg.Url, "u", "", "Url to dump (ensure the .git directory has a trailing '/')")
 	flag.StringVar(&cfg.Localpath, "o", "."+string(os.PathSeparator), "Local folder to dump into")
 	flag.BoolVar(&cfg.IndexBypass, "i", false, "Bypass parsing the index file, but still download it")
+	flag.StringVar(&cfg.IndexLocation, "l", "", "Location of a local index file to parse instead of getting it using this tool")
 
 	flag.Parse()
 
@@ -110,8 +112,22 @@ func main() {
 	//get the index file, parse it for files and whatnot
 	if cfg.IndexBypass {
 		newfilequeue <- url + "index"
+	} else if cfg.IndexLocation != "" {
+		indexfile, err := ioutil.ReadFile(cfg.IndexLocation)
+		if err != nil {
+			panic("Could not read index file: " + err.Error())
+		}
+		err = getIndex(indexfile, newfilequeue, writefileChan)
+		if err != nil {
+			panic(err)
+		}
 	} else {
-		err := getIndex(newfilequeue, writefileChan)
+		indexfile, err := getThing(url + "index")
+		if err != nil {
+			panic(err)
+		}
+
+		err = getIndex(indexfile, newfilequeue, writefileChan)
 		if err != nil {
 			panic(err)
 		}
@@ -169,12 +185,7 @@ func getPacks(newfilequeue chan string, writefileChan chan writeme) {
 	}
 }
 
-func getIndex(newfileChan chan string, localfileChan chan writeme) error {
-
-	indexfile, err := getThing(url + "index")
-	if err != nil {
-		return err
-	}
+func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan writeme) error {
 
 	fmt.Println("Downloaded: ", url+"index")
 
