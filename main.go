@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -60,17 +62,22 @@ func main() {
 	printBanner()
 	//setup
 	cfg := libgogitdumper.Config{}
+	var SSLIgnore bool
 	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	flag.StringVar(&cfg.Url, "u", "", "Url to dump (ensure the .git directory has a trailing '/')")
 	flag.StringVar(&cfg.Localpath, "o", "."+string(os.PathSeparator), "Local folder to dump into")
 	flag.BoolVar(&cfg.IndexBypass, "i", false, "Bypass parsing the index file, but still download it")
 	flag.StringVar(&cfg.IndexLocation, "l", "", "Location of a local index file to parse instead of getting it using this tool")
+	flag.BoolVar(&SSLIgnore, "k", false, "Ignore SSL check")
 
 	flag.Parse()
 
 	if cfg.Url == "" { //todo: check for correct .git thing
 		panic("Url required")
 	}
+
+	//skip ssl errors if requested to
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
 
 	workers := cfg.Threads
 	tested = libgogitdumper.ThreadSafeSet{}.Init()
