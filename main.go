@@ -101,7 +101,6 @@ func main() {
 			os.Exit(1)
 		}
 		httpTransport.Dial = dialer.Dial
-		httpTransport.DialTLS = dialer.Dial
 	}
 
 	workers := cfg.Threads
