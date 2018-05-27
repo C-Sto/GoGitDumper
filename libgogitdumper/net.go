@@ -7,8 +7,8 @@ import (
 	"net/http"
 )
 
-func GetThing(path string) ([]byte, error) {
-	resp, err := http.Get(path)
+func GetThing(path string, client *http.Client) ([]byte, error) {
+	resp, err := client.Get(path)
 	if err != nil {
 		return nil, err
 	}

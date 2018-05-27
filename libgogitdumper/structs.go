@@ -11,6 +11,7 @@ type Config struct {
 	Localpath     string
 	IndexBypass   bool
 	IndexLocation string
+	ProxyAddr     string
 }
 
 type IndexFile struct {

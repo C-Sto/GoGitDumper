@@ -14,12 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/proxy"
+
 	//_ "net/http/pprof"
 	//"./libgogitdumper"
 	"github.com/c-sto/gogitdumper/libgogitdumper"
 )
 
-var version = "0.5.0"
+var version = "0.5.2"
 
 var commonrefs = []string{
 	"", //check for indexing
@@ -49,6 +51,8 @@ var localpath string
 var fileCount uint64
 var byteCount uint64
 
+var client *http.Client
+
 func printBanner() {
 	//todo: include settings in banner
 	fmt.Println(strings.Repeat("=", 20))
@@ -75,15 +79,30 @@ func main() {
 	flag.BoolVar(&cfg.IndexBypass, "i", false, "Bypass parsing the index file, but still download it")
 	flag.StringVar(&cfg.IndexLocation, "l", "", "Location of a local index file to parse instead of getting it using this tool")
 	flag.BoolVar(&SSLIgnore, "k", false, "Ignore SSL check")
+	flag.StringVar(&cfg.ProxyAddr, "p", "", "Proxy configuration options in the form ip:port eg: 127.0.0.1:9050")
 
 	flag.Parse()
 
 	if cfg.Url == "" { //todo: check for correct .git thing
 		panic("Url required")
 	}
+	httpTransport := &http.Transport{}
+	client = &http.Client{Transport: httpTransport}
 
 	//skip ssl errors if requested to
-	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
+	httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
+	//http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
+
+	//user a proxy if requested to
+	if cfg.ProxyAddr != "" {
+		fmt.Println("Proxy set to: ", cfg.ProxyAddr)
+		dialer, err := proxy.SOCKS5("tcp", cfg.ProxyAddr, nil, proxy.Direct)
+		if err != nil {
+			os.Exit(1)
+		}
+		httpTransport.Dial = dialer.Dial
+		httpTransport.DialTLS = dialer.Dial
+	}
 
 	workers := cfg.Threads
 	tested = libgogitdumper.ThreadSafeSet{}.Init()
@@ -134,7 +153,7 @@ func main() {
 				panic(err)
 			}
 		} else {
-			indexfile, err := libgogitdumper.GetThing(url + "index")
+			indexfile, err := libgogitdumper.GetThing(url+"index", client)
 			if err != nil {
 				panic(err)
 			}
@@ -192,7 +211,7 @@ func getPacks(newfilequeue chan string, writefileChan chan libgogitdumper.Writem
 	//todo: parse packfiles for new objects and whatnot
 	//get packfiles from objects/info/packs
 
-	packfile, err := libgogitdumper.GetThing(url + "objects/info/packs")
+	packfile, err := libgogitdumper.GetThing(url+"objects/info/packs", client)
 	if err != nil {
 		//handle error?
 	}
@@ -248,7 +267,7 @@ func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan libg
 }
 
 func testListing(url string) (bool, []byte) {
-	resp, err := libgogitdumper.GetThing(url)
+	resp, err := libgogitdumper.GetThing(url, client)
 	if err != nil {
 		fmt.Println(err, "\nError during indexing test")
 		return false, nil
@@ -278,7 +297,7 @@ func ListingGetWorker(c chan string, c2 chan string, localFileWriteChan chan lib
 
 		} else {
 			//not a directory, download the file and write it as per normal
-			resp, err := libgogitdumper.GetThing(path)
+			resp, err := libgogitdumper.GetThing(path, client)
 			if err != nil {
 				fmt.Println(err, path)
 				wg.Done()
@@ -302,7 +321,7 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
 	for {
 		path := <-c
-		resp, err := libgogitdumper.GetThing(path)
+		resp, err := libgogitdumper.GetThing(path, client)
 		if err != nil {
 			fmt.Println(err, path)
 			wg.Done()
