@@ -11,13 +11,15 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	//_ "net/http/pprof"
-	"github.com/c-sto/gogitdumper/libgogitdumper"
+	"./libgogitdumper"
+	//"github.com/c-sto/gogitdumper/libgogitdumper"
 )
 
-var version = "0.4.2"
+var version = "0.5.0"
 
 var commonrefs = []string{
 	"", //check for indexing
@@ -44,7 +46,11 @@ var tested libgogitdumper.ThreadSafeSet
 var url string
 var localpath string
 
+var fileCount uint64
+var byteCount uint64
+
 func printBanner() {
+	//todo: include settings in banner
 	fmt.Println(strings.Repeat("=", 20))
 	fmt.Println("GoGitDumper V" + version)
 	fmt.Println("Poorly hacked together by C_Sto")
@@ -82,6 +88,8 @@ func main() {
 	workers := cfg.Threads
 	tested = libgogitdumper.ThreadSafeSet{}.Init()
 
+	wg := &sync.WaitGroup{} //this is way overcomplicate, there is probably a better way...
+
 	url = cfg.Url
 	localpath = cfg.Localpath
 
@@ -90,64 +98,97 @@ func main() {
 	newfilequeue := make(chan string, workers*2)
 	writefileChan := make(chan libgogitdumper.Writeme, workers*2)
 
-	go libgogitdumper.LocalWriter(writefileChan, localpath) //writes out the downloaded files
+	go libgogitdumper.LocalWriter(writefileChan, localpath, &fileCount, &byteCount, wg) //writes out the downloaded files
 
 	//takes any new objects identified, and checks to see if already downloaded. will add new files to the queue if unique.
-	go adderWorker(getqueue, newfilequeue)
+	go adderWorker(getqueue, newfilequeue, wg)
 
-	//downloader bois
-	for x := 0; x < workers; x++ {
-		go GetWorker(getqueue, newfilequeue, writefileChan)
-	}
+	isListingEnabled, rawListing := testListing(url)
 
-	//get the index file, parse it for files and whatnot
-	if cfg.IndexBypass {
-		newfilequeue <- url + "index"
-	} else if cfg.IndexLocation != "" {
-		indexfile, err := ioutil.ReadFile(cfg.IndexLocation)
-		if err != nil {
-			panic("Could not read index file: " + err.Error())
+	if isListingEnabled {
+		fmt.Println("Indexing identified, recursively downloading repo directory...")
+		for x := 0; x < workers; x++ {
+			go ListingGetWorker(getqueue, newfilequeue, writefileChan, wg)
 		}
-		err = getIndex(indexfile, newfilequeue, writefileChan)
-		if err != nil {
-			panic(err)
+		for _, x := range parseListing(rawListing) {
+			wg.Add(1)
+			newfilequeue <- url + x
 		}
 	} else {
-		indexfile, err := libgogitdumper.GetThing(url + "index")
-		if err != nil {
-			panic(err)
+		//downloader bois
+		for x := 0; x < workers; x++ {
+			go GetWorker(getqueue, newfilequeue, writefileChan, wg)
 		}
 
-		err = getIndex(indexfile, newfilequeue, writefileChan)
-		if err != nil {
-			panic(err)
+		//get the index file, parse it for files and whatnot
+		if cfg.IndexBypass {
+			wg.Add(1)
+			newfilequeue <- url + "index"
+		} else if cfg.IndexLocation != "" {
+			indexfile, err := ioutil.ReadFile(cfg.IndexLocation)
+			if err != nil {
+				panic("Could not read index file: " + err.Error())
+			}
+			err = getIndex(indexfile, newfilequeue, writefileChan, wg)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			indexfile, err := libgogitdumper.GetThing(url + "index")
+			if err != nil {
+				panic(err)
+			}
+
+			err = getIndex(indexfile, newfilequeue, writefileChan, wg)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		//get the packs (if any exist) and parse them out too
+		getPacks(newfilequeue, writefileChan, wg)
+
+		//get all the common things that contain refs
+		for _, x := range commonrefs {
+			wg.Add(1)
+			newfilequeue <- url + x
+		}
+
+		//get all the common files that may be important I guess?
+		for _, x := range commonfiles {
+			wg.Add(1)
+			newfilequeue <- url + x
 		}
 	}
 
-	//get the packs (if any exist) and parse them out too
-	getPacks(newfilequeue, writefileChan)
+	wg.Wait() //this is more accurate, but difficult to manage and makes the code all gross(er)
 
-	//get all the common things that contain refs
-	for _, x := range commonrefs {
-		newfilequeue <- url + x
-	}
-
-	//get all the common files that may be important I guess?
-	for _, x := range commonfiles {
-		newfilequeue <- url + x
-	}
-
-	//todo: make this wait for closed channels and such
+	//keeping this here for legacy - it should always break out
 	for {
 		if len(getqueue) == 0 && len(newfilequeue) == 0 {
 			break
 		}
+		fmt.Println("ERROR! WG CALCULATION WRONG")
 		time.Sleep(time.Second * 2)
 	}
+	fmt.Printf("Wrote %d files and %d bytes", fileCount, byteCount)
 
 }
 
-func getPacks(newfilequeue chan string, writefileChan chan libgogitdumper.Writeme) {
+func parseListing(page []byte) []string {
+	var r []string
+	baseDirRe := regexp.MustCompile("Directory listing for /.git/.*<")
+	baseDirByt := baseDirRe.Find(page)
+	baseDirStr := string(baseDirByt[28 : len(baseDirByt)-1])
+	listingRe := regexp.MustCompile("href=[\"'](.*?)[\"']")
+	match := listingRe.FindAll(page, -1)
+	for _, x := range match {
+		r = append(r, baseDirStr+string(x[6:len(x)-1]))
+	}
+	return r
+}
+
+func getPacks(newfilequeue chan string, writefileChan chan libgogitdumper.Writeme, wg *sync.WaitGroup) {
 	//todo: parse packfiles for new objects and whatnot
 	//get packfiles from objects/info/packs
 
@@ -160,6 +201,8 @@ func getPacks(newfilequeue chan string, writefileChan chan libgogitdumper.Writem
 	d := libgogitdumper.Writeme{}
 	d.LocalFilePath = localpath + string(os.PathSeparator) + "objects" + string(os.PathSeparator) + "info" + string(os.PathSeparator) + "packs"
 	d.Filecontents = packfile
+
+	wg.Add(1)
 	writefileChan <- d
 
 	if len(packfile) > 0 {
@@ -169,20 +212,24 @@ func getPacks(newfilequeue chan string, writefileChan chan libgogitdumper.Writem
 		match := sha1re.FindAll(packfile, -1) //doing dumb regex look for sha1's in packfiles, I don't think this is how it works tbh
 		for _, x := range match {
 
+			wg.Add(1)
 			newfilequeue <- url + "objects/pack/pack-" + string(x) + ".idx"
+			wg.Add(1)
 			newfilequeue <- url + "objects/pack/pack-" + string(x) + ".pack"
 		}
 
 	}
 }
 
-func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan libgogitdumper.Writeme) error {
+func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan libgogitdumper.Writeme, wg *sync.WaitGroup) error {
 
 	fmt.Println("Downloaded: ", url+"index")
 
 	d := libgogitdumper.Writeme{}
 	d.LocalFilePath = localpath + string(os.PathSeparator) + "index"
 	d.Filecontents = indexfile
+
+	wg.Add(1)
 	localfileChan <- d
 
 	parsed, err := libgogitdumper.ParseIndexFile(indexfile)
@@ -192,6 +239,7 @@ func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan libg
 	}
 
 	for _, x := range parsed.Entries {
+		wg.Add(1)
 		newfileChan <- url + "objects/" + string(x.Sha1[0:2]) + "/" + string(x.Sha1[2:])
 	}
 
@@ -199,11 +247,59 @@ func getIndex(indexfile []byte, newfileChan chan string, localfileChan chan libg
 
 }
 
-func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdumper.Writeme) {
+func testListing(url string) (bool, []byte) {
+	resp, err := libgogitdumper.GetThing(url)
+	if err != nil {
+		fmt.Println(err, "\nError during indexing test")
+		return false, nil
+		//todo: handle err better
+	}
+
+	if strings.Contains(string(resp), "<title>Directory listing for ") {
+		return true, resp
+	}
+	return false, nil
+}
+
+func ListingGetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdumper.Writeme, wg *sync.WaitGroup) {
+	for {
+		path := <-c
+		//check for directory
+		if string(path[len(path)-1]) == "/" {
+			//don't bother downloading this file to save locally, but parse it for MORE files!
+			isActually, listingContent := testListing(path)
+			if isActually {
+				fmt.Println("Found Directory: ", path)
+				for _, x := range parseListing(listingContent) {
+					wg.Add(1) //to be processed by adderworker
+					c2 <- url + x
+				}
+			}
+
+		} else {
+			//not a directory, download the file and write it as per normal
+			resp, err := libgogitdumper.GetThing(path)
+			if err != nil {
+				fmt.Println(err, path)
+				continue //todo: handle err better
+			}
+			fmt.Println("Downloaded: ", path)
+			//write to local path
+			d := libgogitdumper.Writeme{}
+			d.LocalFilePath = localpath + string(os.PathSeparator) + path[len(url):]
+			d.Filecontents = resp
+
+			wg.Add(1) //to be processed by localwriterworker
+			localFileWriteChan <- d
+		}
+		wg.Done() //finished getting the new thing
+	}
+}
+
+func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdumper.Writeme, wg *sync.WaitGroup) {
 	sha1re := regexp.MustCompile("[0-9a-fA-F]{40}")
 	refre := regexp.MustCompile(`(refs(/[a-zA-Z0-9\-\.\_\*]+)+)`)
 	for {
-
 		path := <-c
 		resp, err := libgogitdumper.GetThing(path)
 		if err != nil {
@@ -215,6 +311,8 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 		d := libgogitdumper.Writeme{}
 		d.LocalFilePath = localpath + string(os.PathSeparator) + path[len(url):]
 		d.Filecontents = resp
+
+		wg.Add(1)
 		localFileWriteChan <- d
 
 		//check if we can zlib decompress it
@@ -231,7 +329,7 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 		match := sha1re.FindAll(resp, -1)
 		for _, x := range match {
 			//add sha1's to line
-
+			wg.Add(1)
 			c2 <- url + "objects/" + string(x[0:2]) + "/" + string(x[2:])
 
 		}
@@ -242,18 +340,21 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 			if string(x[len(x)-1]) == "*" {
 				continue
 			}
+			wg.Add(1)
 			c2 <- url + string(x)
+			wg.Add(1)
 			c2 <- url + "logs/" + string(x)
 		}
 
 	}
 }
 
-func adderWorker(getChan chan string, potentialChan chan string) {
+func adderWorker(getChan chan string, potentialChan chan string, wg *sync.WaitGroup) {
 	for {
 		x := <-potentialChan
 		if !tested.HasValue(x) {
 			tested.Add(x)
+			wg.Add(1) //signal that we have some more stuff to do (added to the 'get' chan)
 			select {
 			case getChan <- x:
 				//do nothing (this should avoid spinnign up infinity goroutines, and instead only spin up infinity/2)
@@ -263,6 +364,7 @@ func adderWorker(getChan chan string, potentialChan chan string) {
 			}
 
 		}
+		wg.Done() //we finished processing the potentially new thing
 	}
 
 }

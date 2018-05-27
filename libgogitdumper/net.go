@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 )
 
 func GetThing(path string) ([]byte, error) {
@@ -24,8 +23,5 @@ func GetThing(path string) ([]byte, error) {
 	buf.ReadFrom(resp.Body)
 	body := buf.Bytes()
 
-	if strings.Contains(string(body), "<title>Directory listing for ") {
-		return nil, errors.New("Found directory indexing, consider using recursive grep to mirror")
-	}
 	return body, err
 }
