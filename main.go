@@ -281,6 +281,7 @@ func ListingGetWorker(c chan string, c2 chan string, localFileWriteChan chan lib
 			resp, err := libgogitdumper.GetThing(path)
 			if err != nil {
 				fmt.Println(err, path)
+				wg.Done()
 				continue //todo: handle err better
 			}
 			fmt.Println("Downloaded: ", path)
