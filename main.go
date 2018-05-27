@@ -15,8 +15,8 @@ import (
 	"time"
 
 	//_ "net/http/pprof"
-	"./libgogitdumper"
-	//"github.com/c-sto/gogitdumper/libgogitdumper"
+	//"./libgogitdumper"
+	"github.com/c-sto/gogitdumper/libgogitdumper"
 )
 
 var version = "0.5.0"
