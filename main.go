@@ -305,6 +305,7 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 		resp, err := libgogitdumper.GetThing(path)
 		if err != nil {
 			fmt.Println(err, path)
+			wg.Done()
 			continue //todo: handle err better
 		}
 		fmt.Println("Downloaded: ", path)
@@ -346,6 +347,7 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 			wg.Add(1)
 			c2 <- url + "logs/" + string(x)
 		}
+		wg.Done()
 
 	}
 }
