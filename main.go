@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -93,14 +95,31 @@ func main() {
 	httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
 	//http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: SSLIgnore}
 
-	//user a proxy if requested to
-	if cfg.ProxyAddr != "" {
-		fmt.Println("Proxy set to: ", cfg.ProxyAddr)
-		dialer, err := proxy.SOCKS5("tcp", cfg.ProxyAddr, nil, proxy.Direct)
-		if err != nil {
-			os.Exit(1)
+	//use a proxy if requested to
+	if cfg.ProxyAddr != "" { // proxy configured, in burpmode, and at the stage where we want to actually send it to burp
+		if strings.HasPrefix(cfg.ProxyAddr, "http") {
+			proxyURL, err := urlpkg.Parse(cfg.ProxyAddr)
+			if err != nil {
+				panic(err)
+			}
+			httpTransport.Proxy = http.ProxyURL(proxyURL)
+			//test proxy
+			_, err = net.Dial("tcp", proxyURL.Host)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			dialer, err := proxy.SOCKS5("tcp", cfg.ProxyAddr, nil, proxy.Direct)
+			if err != nil {
+				panic(err)
+			}
+			httpTransport.Dial = dialer.Dial
+			//test proxy
+			_, err = net.Dial("tcp", cfg.ProxyAddr)
+			if err != nil {
+				panic(err)
+			}
 		}
-		httpTransport.Dial = dialer.Dial
 	}
 
 	workers := cfg.Threads
