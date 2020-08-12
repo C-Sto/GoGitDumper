@@ -77,13 +77,19 @@ func main() {
 	var SSLIgnore bool
 	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	flag.StringVar(&cfg.Url, "u", "", "Url to dump (ensure the .git directory has a trailing '/')")
-	flag.StringVar(&cfg.Localpath, "o", "."+string(os.PathSeparator), "Local folder to dump into")
+	flag.StringVar(&cfg.Localpath, "o", ".git"+string(os.PathSeparator), "Local folder to dump into")
 	flag.BoolVar(&cfg.IndexBypass, "i", false, "Bypass parsing the index file, but still download it")
 	flag.StringVar(&cfg.IndexLocation, "l", "", "Location of a local index file to parse instead of getting it using this tool")
 	flag.BoolVar(&SSLIgnore, "k", false, "Ignore SSL check")
 	flag.StringVar(&cfg.ProxyAddr, "p", "", "Proxy configuration options in the form ip:port eg: 127.0.0.1:9050")
-
+	force := flag.Bool("f", false, "force overwrite of .git dir")
 	flag.Parse()
+
+	if _, err := os.Stat(cfg.Localpath); !os.IsNotExist(err) && !*force {
+		//exists
+		fmt.Println("directory exists!!! do you want to overwrite?? if yes, run again with -f")
+		os.Exit(1)
+	}
 
 	if cfg.Url == "" { //todo: check for correct .git thing
 		panic("Url required")
