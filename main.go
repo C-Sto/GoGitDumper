@@ -23,7 +23,7 @@ import (
 	"github.com/c-sto/gogitdumper/libgogitdumper"
 )
 
-var version = "0.5.2"
+var version = "0.6.0"
 
 var commonrefs = []string{
 	"", //check for indexing
@@ -346,10 +346,17 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 			continue //todo: handle err better
 		}
 		fmt.Println("Downloaded: ", path)
+		if strings.Contains(path, "/objects/") && !bytes.HasPrefix(resp, []byte{120, 1}) {
+			//all object files have to be gz
+			fmt.Println(resp[:5], []byte{120, 1}, string(resp[:5]))
+			wg.Done()
+			continue
+		}
 		//write to local path
 		d := libgogitdumper.Writeme{}
 		d.LocalFilePath = localpath + string(os.PathSeparator) + path[len(url):]
-		d.Filecontents = resp
+		d.Filecontents = make([]byte, len(resp))
+		copy(d.Filecontents, resp)
 
 		wg.Add(1)
 		localFileWriteChan <- d
@@ -363,8 +370,17 @@ func GetWorker(c chan string, c2 chan string, localFileWriteChan chan libgogitdu
 			resp = buf.Bytes()
 			r.Close()
 		}
+		if bytes.HasPrefix(resp, []byte("tree")) {
+			treeobj := libgogitdumper.ParseTreeFile(resp)
+			for _, x := range treeobj.TreeEntries {
+				//add sha1's to line
+				sha1string := fmt.Sprintf("%x", x.Hash)
+				wg.Add(1)
+				c2 <- url + "objects/" + string(sha1string[0:2]) + "/" + string(sha1string[2:])
 
-		//check for any sha1 objects in the thing
+			}
+
+		}
 		match := sha1re.FindAll(resp, -1)
 		for _, x := range match {
 			//add sha1's to line
