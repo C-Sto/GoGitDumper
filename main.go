@@ -11,6 +11,7 @@ import (
 	"net/http"
 	urlpkg "net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ import (
 	"github.com/c-sto/gogitdumper/libgogitdumper"
 )
 
-var version = "0.6.0"
+var version = "0.7.0"
 
 var commonrefs = []string{
 	"", //check for indexing
@@ -75,6 +76,7 @@ func main() {
 	//setup
 	cfg := libgogitdumper.Config{}
 	var SSLIgnore bool
+	var err error
 	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	flag.StringVar(&cfg.Url, "u", "", "Url to dump (ensure the .git directory has a trailing '/')")
 	flag.StringVar(&cfg.Localpath, "o", ".git"+string(os.PathSeparator), "Local folder to dump into")
@@ -84,6 +86,11 @@ func main() {
 	flag.StringVar(&cfg.ProxyAddr, "p", "", "Proxy configuration options in the form ip:port eg: 127.0.0.1:9050")
 	force := flag.Bool("f", false, "force overwrite of .git dir")
 	flag.Parse()
+
+	cfg.Localpath, err = filepath.Abs(cfg.Localpath)
+	if err != nil {
+		panic(err)
+	}
 
 	if _, err := os.Stat(cfg.Localpath); !os.IsNotExist(err) && !*force {
 		//exists

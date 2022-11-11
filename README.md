@@ -1,5 +1,9 @@
 # GoGitDumper 
 
+# IMPORTANT!
+
+Versions before 0.7 are vulnerable to a directory traversal (and arbitrary file write).
+
 ### Installation
 
 ```
